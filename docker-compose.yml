@@ -9,11 +9,16 @@ services:
     depends_on:
       - api1
       - api2
+    # Compose resource limits are inconsistently enforced across runtimes.
+    # Keep deploy.limits (Swarm-compatible) and also set cpus/mem_limit for local runs.
+    cpus: "0.05"
+    mem_limit: 20m
     deploy:
       resources:
         limits:
           cpus: "0.05"
           memory: 20M
+    networks: [rinha]
 
   api1:
     build:
@@ -26,11 +31,14 @@ services:
       - DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
     expose:
       - "8080"
+    cpus: "0.475"
+    mem_limit: 155m
     deploy:
       resources:
         limits:
           cpus: "0.475"
           memory: 155M
+    networks: [rinha]
 
   api2:
     build:
@@ -43,9 +51,16 @@ services:
       - DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
     expose:
       - "8080"
+    cpus: "0.475"
+    mem_limit: 155m
     deploy:
       resources:
         limits:
           cpus: "0.475"
           memory: 155M
+    networks: [rinha]
+
+networks:
+  rinha:
+    driver: bridge
 
