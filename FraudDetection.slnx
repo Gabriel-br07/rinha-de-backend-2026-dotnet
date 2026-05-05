@@ -1,7 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/FraudDetection.Api/FraudDetection.Api.csproj" />
-    <Project Path="src/FraudDetection.Preprocess/FraudDetection.Preprocess.csproj" />
-    <Project Path="src/FraudDetection.Tests/FraudDetection.Tests.csproj" />
-  </Folder>
-</Solution>
