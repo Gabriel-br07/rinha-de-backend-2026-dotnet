@@ -45,6 +45,7 @@ app.MapGet("/ready", (IndexStore store) =>
 
 app.MapPost("/fraud-score", (FraudScoreRequest request, IndexStore store, TransactionVectorizer vectorizer, ExactKnnSearcher searcher, ILogger<Program> logger) =>
 {
+    // Obs: timings com Stopwatch são temporários (diagnóstico de gargalos); remover ou condicionar depois para menos overhead no hot path.
     var swTotal = Stopwatch.StartNew();
     try
     {
