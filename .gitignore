@@ -55,3 +55,6 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# k6 exported summaries (keep directory via results/.gitkeep)
+results/*.json
