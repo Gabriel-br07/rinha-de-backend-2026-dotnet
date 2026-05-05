@@ -156,7 +156,27 @@ Implementation: `src/FraudDetection.Api/Search/ExactKnnSearcher.cs`.
 
 - Startup/index errors are stored in memory and `/ready` remains `503`.
 - `/fraud-score` is wrapped in a try/catch and returns a valid fallback JSON response on unexpected errors.
-- No noisy per-request logging is performed in the hot path.
+- **Sampled** timing logs on `/fraud-score` and **minimal** exception logs — see [docs/testing.md](docs/testing.md).
+
+## Load testing (k6)
+
+Full steps, result export, interpreting metrics, and `dotnet-counters` guidance: **[docs/testing.md](docs/testing.md)**.
+
+```bash
+docker compose up --build
+curl http://localhost:9999/ready
+k6 run test/k6/smoke.js
+k6 run test/k6/load.js
+k6 run --summary-export results/load-summary.json test/k6/load.js
+```
+
+Follow logs:
+
+```bash
+docker compose logs -f api1
+docker compose logs -f api2
+docker compose logs -f nginx
+```
 
 ## Docker architecture
 
@@ -202,13 +222,14 @@ Output:
 
 ## How to test the API
 
-Example request:
+See **[docs/testing.md](docs/testing.md)** for sanity checks (`curl` / `scripts/sanity.ps1`), smoke, and load tests.
+
+The file `resources/example-payloads.json` contains **multiple** example objects in an array; the API expects **one JSON object per request**. Example single-object POST:
 
 ```bash
-curl -s -X POST "http://localhost:9999/fraud-score" -H "Content-Type: application/json" --data-binary @resources/example-payloads.json
+curl -s -X POST "http://localhost:9999/fraud-score" -H "Content-Type: application/json" \
+  -d '{"id":"sanity-tx-local-001","transaction":{"amount":120.5,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":80.0,"tx_count_24h":4,"known_merchants":["M-SANITY-LOCAL-01"]},"merchant":{"id":"M-SANITY-LOCAL-01","mcc":"5411","avg_amount":60.0},"terminal":{"is_online":false,"card_present":true,"km_from_home":12.5},"last_transaction":null}'
 ```
-
-You can also send a single object from `resources/example-payloads.json`.
 
 ## Future optimizations
 

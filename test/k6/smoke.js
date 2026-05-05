@@ -1,0 +1,50 @@
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+import { makePayload } from './lib/payloads.js';
+
+export const options = {
+  vus: 1,
+  duration: '10s',
+  thresholds: {
+    http_req_failed: ['rate==0'],
+    http_req_duration: ['p(99)<2000'],
+  },
+};
+
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:9999';
+
+export function setup() {
+  const deadline = Date.now() + 120000;
+  while (Date.now() < deadline) {
+    const res = http.get(`${BASE_URL}/ready`);
+    if (res.status === 200) {
+      return { baseUrl: BASE_URL };
+    }
+    sleep(1);
+  }
+  throw new Error('GET /ready did not return HTTP 200 within timeout');
+}
+
+export default function (data) {
+  const base = data.baseUrl || BASE_URL;
+  const body = makePayload(__VU, __ITER);
+  const res = http.post(`${base}/fraud-score`, body, {
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(res.body);
+  } catch (_) {
+    parsed = null;
+  }
+
+  check(res, {
+    'status 200': (r) => r.status === 200,
+    'json parse': () => parsed !== null,
+    'approved boolean': () => typeof parsed?.approved === 'boolean',
+    'fraud_score number': () => typeof parsed?.fraud_score === 'number',
+  });
+
+  sleep(0.05);
+}

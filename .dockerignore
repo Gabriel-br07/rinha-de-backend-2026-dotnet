@@ -1,0 +1,12 @@
+# Prevent host bin/obj (often Windows) from overwriting Linux RID restore output in the image build.
+**/[Bb]in/
+**/[Oo]bj/
+
+.git
+.gitignore
+**/.vs
+**/*.user
+
+# Test artifacts and local k6 exports (not needed for API image)
+**/TestResults/
+results/
