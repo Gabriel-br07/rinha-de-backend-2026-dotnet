@@ -73,7 +73,7 @@ k6 run .\test\k6\smoke.js
 With another base URL (optional):
 
 ```bash
-$env:BASE_URL="http://localhost:9999"; k6 run test/k6/smoke.js
+BASE_URL="http://localhost:9999" k6 run test/k6/smoke.js
 ```
 
 ## k6 progressive load test
