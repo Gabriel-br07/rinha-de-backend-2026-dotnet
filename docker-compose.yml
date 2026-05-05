@@ -16,7 +16,7 @@ services:
           memory: 20M
 
   api1:
-    image: ghcr.io/gabriel-br07/rinha-de-backend-2026-dotnet:latest
+    image: ghcr.io/gabriel-br07/rinha-de-backend-2026-dotnet:v1
     platform: linux/amd64
     environment:
       - ASPNETCORE_URLS=http://+:8080
@@ -31,7 +31,7 @@ services:
           memory: 155M
 
   api2:
-    image: ghcr.io/gabriel-br07/rinha-de-backend-2026-dotnet:latest
+    image: ghcr.io/gabriel-br07/rinha-de-backend-2026-dotnet:v1
     platform: linux/amd64
     environment:
       - ASPNETCORE_URLS=http://+:8080
