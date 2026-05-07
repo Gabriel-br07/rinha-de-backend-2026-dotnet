@@ -51,7 +51,7 @@ COPY ./resources/references.json.gz ./resources/references.json.gz
 
 # Ensure the output directory exists even if the tool changes.
 RUN mkdir -p /work/data \
-    && dotnet ./preprocess/FraudDetection.Preprocess.dll ./resources/references.json.gz /work/data
+    && dotnet ./preprocess/FraudDetection.Preprocess.dll ./resources/references.json.gz /work/data 1024
 
 # Final runtime image
 FROM --platform=$TARGETPLATFORM mcr.microsoft.com/dotnet/aspnet:9.0-bookworm-slim AS final

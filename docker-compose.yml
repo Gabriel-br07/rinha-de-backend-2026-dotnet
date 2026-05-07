@@ -27,8 +27,10 @@ services:
     platform: linux/amd64
     environment:
       - ASPNETCORE_URLS=http://+:8080
-      - DOTNET_EnableDiagnostics=0
+      - DOTNET_EnableDiagnostics=${DOTNET_EnableDiagnostics:-0}
       - DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+      - VECTOR_SEARCH_MODE=${VECTOR_SEARCH_MODE:-ivf}
+      - IVF_NPROBE=${IVF_NPROBE:-8}
     expose:
       - "8080"
     cpus: "0.475"
@@ -47,8 +49,10 @@ services:
     platform: linux/amd64
     environment:
       - ASPNETCORE_URLS=http://+:8080
-      - DOTNET_EnableDiagnostics=0
+      - DOTNET_EnableDiagnostics=${DOTNET_EnableDiagnostics:-0}
       - DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+      - VECTOR_SEARCH_MODE=${VECTOR_SEARCH_MODE:-ivf}
+      - IVF_NPROBE=${IVF_NPROBE:-8}
     expose:
       - "8080"
     cpus: "0.475"
