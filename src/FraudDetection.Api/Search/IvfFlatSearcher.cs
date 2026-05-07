@@ -38,14 +38,21 @@ public sealed class IvfFlatSearcher
             ScanRangeTop5(vectors, labels, start, end, query14, bestDist, bestLabel);
         }
 
+        var neighborCount = 0;
         var fraud = 0;
-        if (bestLabel[0] == 1) fraud++;
-        if (bestLabel[1] == 1) fraud++;
-        if (bestLabel[2] == 1) fraud++;
-        if (bestLabel[3] == 1) fraud++;
-        if (bestLabel[4] == 1) fraud++;
+        for (var i = 0; i < 5; i++)
+        {
+            if (bestDist[i] == int.MaxValue)
+                break;
+            neighborCount++;
+            if (bestLabel[i] == 1)
+                fraud++;
+        }
 
-        return fraud / 5.0f;
+        if (neighborCount == 0)
+            return 1.0f;
+
+        return fraud / (float)neighborCount;
     }
 
     private static void ScanRangeTop5(

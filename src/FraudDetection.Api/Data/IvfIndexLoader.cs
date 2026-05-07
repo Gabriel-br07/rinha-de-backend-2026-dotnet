@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using FraudDetection.Api.Options;
 
 namespace FraudDetection.Api.Data;
@@ -16,8 +17,9 @@ public static class IvfIndexLoader
         if (centroidBytes.Length < 8)
             throw new InvalidDataException($"'{paths.IvfCentroidsBinPath}' is too small ({centroidBytes.Length} bytes)");
 
-        var nlist = BitConverter.ToInt32(centroidBytes, 0);
-        var dim = BitConverter.ToInt32(centroidBytes, 4);
+        ReadOnlySpan<byte> centroidSpan = centroidBytes;
+        var nlist = BinaryPrimitives.ReadInt32LittleEndian(centroidSpan[..4]);
+        var dim = BinaryPrimitives.ReadInt32LittleEndian(centroidSpan.Slice(4, 4));
 
         if (nlist <= 0)
             throw new InvalidDataException($"'{paths.IvfCentroidsBinPath}' invalid nlist={nlist}");
@@ -37,12 +39,15 @@ public static class IvfIndexLoader
         if (offsetsBytes.Length != expectedOffsetsLen)
             throw new InvalidDataException($"'{paths.IvfOffsetsBinPath}' size {offsetsBytes.Length} doesn't match nlist={nlist} (expected {expectedOffsetsLen})");
 
-        var offsetsNlist = BitConverter.ToInt32(offsetsBytes, 0);
+        ReadOnlySpan<byte> offsetsSpan = offsetsBytes;
+        var offsetsNlist = BinaryPrimitives.ReadInt32LittleEndian(offsetsSpan[..4]);
         if (offsetsNlist != nlist)
             throw new InvalidDataException($"'{paths.IvfOffsetsBinPath}' header nlist={offsetsNlist} doesn't match centroids nlist={nlist}");
 
         var offsets = new int[nlist + 1];
-        Buffer.BlockCopy(offsetsBytes, 4, offsets, 0, (nlist + 1) * 4);
+        var payload = offsetsSpan.Slice(4, (nlist + 1) * 4);
+        for (var i = 0; i <= nlist; i++)
+            offsets[i] = BinaryPrimitives.ReadInt32LittleEndian(payload.Slice(i * 4, 4));
 
         ValidateOffsets(paths.IvfOffsetsBinPath, offsets);
 
