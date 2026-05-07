@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using FraudDetection.Api.Serialization;
 
@@ -5,20 +6,20 @@ namespace FraudDetection.Api.Vectorization;
 
 public sealed class MccRiskProvider
 {
-    private readonly Dictionary<string, float> _map;
+    private readonly FrozenDictionary<string, float> _map;
 
-    private MccRiskProvider(Dictionary<string, float> map)
+    private MccRiskProvider(FrozenDictionary<string, float> map)
     {
         _map = map;
     }
 
     public static MccRiskProvider LoadFromFile(string path)
     {
-        // Small map; JSON parse once at startup is fine.
         using var fs = File.OpenRead(path);
-        var map = JsonSerializer.Deserialize(fs, AppJsonSerializerContext.Default.DictionaryStringSingle)
+        var raw = JsonSerializer.Deserialize(fs, AppJsonSerializerContext.Default.DictionaryStringSingle)
                   ?? new Dictionary<string, float>(StringComparer.Ordinal);
 
+        var map = raw.ToFrozenDictionary(StringComparer.Ordinal);
         return new MccRiskProvider(map);
     }
 

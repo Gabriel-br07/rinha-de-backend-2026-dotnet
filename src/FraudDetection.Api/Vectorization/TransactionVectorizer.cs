@@ -5,24 +5,39 @@ namespace FraudDetection.Api.Vectorization;
 
 public sealed class TransactionVectorizer
 {
-    private readonly NormalizationOptions _n;
+    // Reciprocals so the request hot path multiplies instead of dividing.
+    // Only safe because every divisor in NormalizationOptions is fixed at startup.
+    private readonly float _invMaxAmount;
+    private readonly float _invMaxInstallments;
+    private readonly float _invAmountVsAvgRatio;
+    private readonly float _invMaxMinutes;
+    private readonly float _invMaxKm;
+    private readonly float _invMaxTxCount24h;
+    private readonly float _invMaxMerchantAvgAmount;
+    private const float InvMaxHour = 1f / 23f;
+    private const float InvMaxDayOfWeek = 1f / 6f;
+
     private readonly MccRiskProvider _mcc;
 
     public TransactionVectorizer(NormalizationOptions normalization, MccRiskProvider mccRiskProvider)
     {
-        _n = normalization;
+        _invMaxAmount = SafeReciprocal(normalization.max_amount);
+        _invMaxInstallments = SafeReciprocal(normalization.max_installments);
+        _invAmountVsAvgRatio = SafeReciprocal(normalization.amount_vs_avg_ratio);
+        _invMaxMinutes = SafeReciprocal(normalization.max_minutes);
+        _invMaxKm = SafeReciprocal(normalization.max_km);
+        _invMaxTxCount24h = SafeReciprocal(normalization.max_tx_count_24h);
+        _invMaxMerchantAvgAmount = SafeReciprocal(normalization.max_merchant_avg_amount);
+
         _mcc = mccRiskProvider;
     }
 
-    public void VectorizeTo14(FraudScoreRequest req, Span<float> v14)
+    public void VectorizeTo14(in FraudScoreRequest req, Span<float> v14)
     {
-        // 0 amount
-        v14[0] = Clamp.Clamp01(req.transaction.amount / _n.max_amount);
+        v14[0] = Clamp.Clamp01(req.transaction.amount * _invMaxAmount);
 
-        // 1 installments
-        v14[1] = Clamp.Clamp01(req.transaction.installments / _n.max_installments);
+        v14[1] = Clamp.Clamp01(req.transaction.installments * _invMaxInstallments);
 
-        // 2 amount_vs_avg
         var avg = req.customer.avg_amount;
         float amountVsAvg;
         if (avg <= 0f)
@@ -31,20 +46,16 @@ public sealed class TransactionVectorizer
         }
         else
         {
-            amountVsAvg = (req.transaction.amount / avg) / _n.amount_vs_avg_ratio;
+            amountVsAvg = req.transaction.amount / avg * _invAmountVsAvgRatio;
         }
         v14[2] = Clamp.Clamp01(amountVsAvg);
 
-        // 3 hour_of_day (UTC)
         var utc = req.transaction.requested_at.UtcDateTime;
-        v14[3] = Clamp.Clamp01(utc.Hour / 23f);
+        v14[3] = Clamp.Clamp01(utc.Hour * InvMaxHour);
 
-        // 4 day_of_week (Monday=0..Sunday=6)
         var dow = ((int)utc.DayOfWeek + 6) % 7;
-        v14[4] = Clamp.Clamp01(dow / 6f);
+        v14[4] = Clamp.Clamp01(dow * InvMaxDayOfWeek);
 
-        // 5 minutes_since_last_tx
-        // 6 km_from_last_tx
         if (req.last_transaction is null)
         {
             v14[5] = -1f;
@@ -52,35 +63,31 @@ public sealed class TransactionVectorizer
         }
         else
         {
-            var delta = req.transaction.requested_at - req.last_transaction.timestamp;
+            var last = req.last_transaction.Value;
+            var delta = req.transaction.requested_at - last.timestamp;
             var minutes = (float)delta.TotalMinutes;
             if (minutes < 0f) minutes = 0f;
-            v14[5] = Clamp.Clamp01(minutes / _n.max_minutes);
+            v14[5] = Clamp.Clamp01(minutes * _invMaxMinutes);
 
-            v14[6] = Clamp.Clamp01(req.last_transaction.km_from_current / _n.max_km);
+            v14[6] = Clamp.Clamp01(last.km_from_current * _invMaxKm);
         }
 
-        // 7 km_from_home
-        v14[7] = Clamp.Clamp01(req.terminal.km_from_home / _n.max_km);
+        v14[7] = Clamp.Clamp01(req.terminal.km_from_home * _invMaxKm);
 
-        // 8 tx_count_24h
-        v14[8] = Clamp.Clamp01(req.customer.tx_count_24h / _n.max_tx_count_24h);
+        v14[8] = Clamp.Clamp01(req.customer.tx_count_24h * _invMaxTxCount24h);
 
-        // 9 is_online
         v14[9] = req.terminal.is_online ? 1f : 0f;
 
-        // 10 card_present
         v14[10] = req.terminal.card_present ? 1f : 0f;
 
-        // 11 unknown_merchant
         v14[11] = IsKnownMerchant(req.merchant.id, req.customer.known_merchants) ? 0f : 1f;
 
-        // 12 mcc_risk
         v14[12] = _mcc.GetRiskOrDefault(req.merchant.mcc);
 
-        // 13 merchant_avg_amount
-        v14[13] = Clamp.Clamp01(req.merchant.avg_amount / _n.max_merchant_avg_amount);
+        v14[13] = Clamp.Clamp01(req.merchant.avg_amount * _invMaxMerchantAvgAmount);
     }
+
+    private static float SafeReciprocal(float value) => value > 0f ? 1f / value : 0f;
 
     private static bool IsKnownMerchant(string merchantId, string[]? knownMerchants)
     {
