@@ -1,14 +1,16 @@
-using FraudDetection.Api.Dtos;
 using FraudDetection.Api.Data;
+using FraudDetection.Api.Dtos;
 using FraudDetection.Api.Options;
 using FraudDetection.Api.Search;
 using FraudDetection.Api.Serialization;
 using FraudDetection.Api.Vectorization;
 using Microsoft.Extensions.Options;
-using System.Diagnostics;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
+
+ApplyEnvOverride(builder, "VECTOR_SEARCH_MODE", "VectorSearch:Mode");
+ApplyEnvOverride(builder, "IVF_NPROBE", "VectorSearch:NProbe");
 
 builder.Services.ConfigureHttpJsonOptions(static o =>
 {
@@ -17,6 +19,9 @@ builder.Services.ConfigureHttpJsonOptions(static o =>
 
 builder.Services.AddOptions<DataPathsOptions>()
     .Bind(builder.Configuration.GetSection("Paths"));
+builder.Services.AddOptions<VectorSearchOptions>()
+    .Bind(builder.Configuration.GetSection("VectorSearch"));
+
 builder.Services.AddSingleton<IndexStore>();
 builder.Services.AddHostedService<IndexLoaderHostedService>();
 
@@ -35,63 +40,86 @@ builder.Services.AddSingleton(sp =>
 
 builder.Services.AddSingleton<TransactionVectorizer>();
 builder.Services.AddSingleton<ExactKnnSearcher>();
+builder.Services.AddSingleton<IvfFlatSearcher>();
 
 var app = builder.Build();
 
 app.Logger.LogInformation("FraudDetection API application starting (HTTP pipeline configured)");
 
-app.MapGet("/ready", (IndexStore store) =>
-    store.IsReady ? Results.Ok() : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
+// Resolve dependencies once at startup so the handler avoids per-request DI / IOptions lookups.
+var store = app.Services.GetRequiredService<IndexStore>();
+var vectorizer = app.Services.GetRequiredService<TransactionVectorizer>();
+var exactSearcher = app.Services.GetRequiredService<ExactKnnSearcher>();
+var ivfSearcher = app.Services.GetRequiredService<IvfFlatSearcher>();
+var searchOptions = app.Services.GetRequiredService<IOptions<VectorSearchOptions>>().Value;
+var hotPathLogger = app.Logger;
 
-app.MapPost("/fraud-score", (FraudScoreRequest request, IndexStore store, TransactionVectorizer vectorizer, ExactKnnSearcher searcher, ILogger<Program> logger) =>
+var ivfMode = string.Equals(
+    (searchOptions.Mode ?? "exact").Trim(),
+    "ivf",
+    StringComparison.OrdinalIgnoreCase);
+var nprobe = searchOptions.NProbe;
+
+var fallbackResponse = new FraudScoreResponse(approved: true, fraud_score: 0.0f);
+
+app.Logger.LogInformation("Hot-path config: ivfMode={IvfMode} nprobe={NProbe}", ivfMode, nprobe);
+
+app.MapGet("/ready", (IndexStore s) =>
+    s.IsReady ? Results.Ok() : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
+
+app.MapPost("/fraud-score", (FraudScoreRequest request) =>
 {
-    // Obs: timings com Stopwatch são temporários (diagnóstico de gargalos); remover ou condicionar depois para menos overhead no hot path.
-    var swTotal = Stopwatch.StartNew();
     try
     {
-        var index = store.TryGet();
-        if (index is null)
-        {
-            if (Random.Shared.Next(128) == 0)
-            {
-                logger.LogInformation(
-                    "FraudScore sample: index not loaded, totalMs={TotalMs:F3}",
-                    swTotal.Elapsed.TotalMilliseconds);
-            }
+        IvfIndex? indexIvf = null;
+        VectorIndex? indexExact = null;
 
-            return Results.Json(new FraudScoreResponse(approved: true, fraud_score: 0.0f), AppJsonSerializerContext.Default.FraudScoreResponse);
+        if (ivfMode)
+        {
+            indexIvf = store.TryGetIvf();
+            if (indexIvf is null)
+            {
+                return Results.Json(fallbackResponse, AppJsonSerializerContext.Default.FraudScoreResponse);
+            }
+        }
+        else
+        {
+            indexExact = store.TryGetExact();
+            if (indexExact is null)
+            {
+                return Results.Json(fallbackResponse, AppJsonSerializerContext.Default.FraudScoreResponse);
+            }
         }
 
         Span<float> v14 = stackalloc float[14];
         Span<byte> q14 = stackalloc byte[14];
 
-        var swVector = Stopwatch.StartNew();
         vectorizer.VectorizeTo14(request, v14);
         Quantizer.Encode14(v14, q14);
-        var vectorMs = swVector.Elapsed.TotalMilliseconds;
 
-        var swSearch = Stopwatch.StartNew();
-        var fraudScore = searcher.FraudScore5(index, q14);
-        var searchMs = swSearch.Elapsed.TotalMilliseconds;
+        var fraudScore = ivfMode
+            ? ivfSearcher.FraudScore5(indexIvf!, q14, nprobe)
+            : exactSearcher.FraudScore5(indexExact!, q14);
 
         var approved = fraudScore < 0.6f;
-
-        if (Random.Shared.Next(128) == 0)
-        {
-            logger.LogInformation(
-                "FraudScore sample: totalMs={TotalMs:F3} vectorizeMs={VectorMs:F3} searchMs={SearchMs:F3}",
-                swTotal.Elapsed.TotalMilliseconds,
-                vectorMs,
-                searchMs);
-        }
-
-        return Results.Json(new FraudScoreResponse(approved, fraudScore), AppJsonSerializerContext.Default.FraudScoreResponse);
+        return Results.Json(
+            new FraudScoreResponse(approved, fraudScore),
+            AppJsonSerializerContext.Default.FraudScoreResponse);
     }
     catch (Exception ex)
     {
-        logger.LogWarning(ex, "Fraud-score unexpected exception");
-        return Results.Json(new FraudScoreResponse(approved: true, fraud_score: 0.0f), AppJsonSerializerContext.Default.FraudScoreResponse);
+        hotPathLogger.LogWarning(ex, "Fraud-score unexpected exception");
+        return Results.Json(fallbackResponse, AppJsonSerializerContext.Default.FraudScoreResponse);
     }
 });
 
 app.Run();
+
+static void ApplyEnvOverride(WebApplicationBuilder b, string envName, string configKey)
+{
+    var value = Environment.GetEnvironmentVariable(envName);
+    if (!string.IsNullOrWhiteSpace(value))
+    {
+        b.Configuration[configKey] = value;
+    }
+}
