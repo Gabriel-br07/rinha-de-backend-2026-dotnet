@@ -2,6 +2,7 @@
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
+using FraudDetection.Preprocess.Ivf;
 
 namespace FraudDetection.Preprocess;
 
@@ -19,6 +20,7 @@ internal static class Program
         {
             var input = args.Length > 0 ? args[0] : "resources/references.json.gz";
             var outDir = args.Length > 1 ? args[1] : "data";
+            var nlist = args.Length > 2 ? int.Parse(args[2]) : 1024;
 
             Directory.CreateDirectory(outDir);
 
@@ -28,28 +30,48 @@ internal static class Program
             using var inputFs = File.OpenRead(input);
             using var gzip = new GZipStream(inputFs, CompressionMode.Decompress, leaveOpen: false);
 
-            await using var refsFs = new FileStream(referencesPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20, useAsync: true);
-            await using var labelsFs = new FileStream(labelsPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20, useAsync: true);
+            // We keep preprocessing deterministic and simple: write exact binaries, then build IVF from them.
+            await using (var refsFs = new FileStream(referencesPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20, useAsync: true))
+            await using (var labelsFs = new FileStream(labelsPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 20, useAsync: true))
+            {
+                var count = await ConvertReferencesJsonToBinaryAsync(gzip, refsFs, labelsFs);
 
-            var count = await ConvertReferencesJsonToBinaryAsync(gzip, refsFs, labelsFs);
+                await refsFs.FlushAsync();
+                await labelsFs.FlushAsync();
 
-            await refsFs.FlushAsync();
-            await labelsFs.FlushAsync();
+                var refsLen = refsFs.Length;
+                var labelsLen = labelsFs.Length;
 
-            var refsLen = refsFs.Length;
-            var labelsLen = labelsFs.Length;
+                if (refsLen % 14 != 0)
+                    throw new InvalidDataException($"references.bin size {refsLen} is not divisible by 14");
 
-            if (refsLen % 14 != 0)
-                throw new InvalidDataException($"references.bin size {refsLen} is not divisible by 14");
+                var refsCount = refsLen / 14;
+                if (labelsLen != refsCount)
+                    throw new InvalidDataException($"labels.bin size {labelsLen} doesn't match vector count {refsCount}");
 
-            var refsCount = refsLen / 14;
-            if (labelsLen != refsCount)
-                throw new InvalidDataException($"labels.bin size {labelsLen} doesn't match vector count {refsCount}");
+                if (count != refsCount)
+                    throw new InvalidDataException($"written vector count mismatch: parser={count} file={refsCount}");
 
-            if (count != refsCount)
-                throw new InvalidDataException($"written vector count mismatch: parser={count} file={refsCount}");
+                Console.WriteLine($"OK: wrote {count} references to '{referencesPath}' and '{labelsPath}'");
+            }
 
-            Console.WriteLine($"OK: wrote {count} references to '{referencesPath}' and '{labelsPath}'");
+            // Build IVF-Flat index (random centroids MVP).
+            var vectors = File.ReadAllBytes(referencesPath);
+            var labels = File.ReadAllBytes(labelsPath);
+
+            IvfIndexBuilder.Build(
+                vectors,
+                labels,
+                nlist,
+                out var centroids,
+                out var offsets,
+                out var groupedVectors,
+                out var groupedLabels,
+                seed: 42);
+
+            IvfIndexWriter.WriteAll(outDir, nlist, centroids, offsets, groupedVectors, groupedLabels);
+            Console.WriteLine($"OK: wrote IVF index (nlist={nlist}) to '{outDir}'");
+
             return 0;
         }
         catch (Exception ex)

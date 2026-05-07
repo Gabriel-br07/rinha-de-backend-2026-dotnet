@@ -13,4 +13,3 @@ namespace FraudDetection.Api.Serialization;
 [JsonSerializable(typeof(Dictionary<string, float>))]
 [JsonSerializable(typeof(NormalizationOptions))]
 public partial class AppJsonSerializerContext : JsonSerializerContext;
-

@@ -1,6 +1,6 @@
 namespace FraudDetection.Api.Dtos;
 
-public sealed record FraudScoreRequest(
+public readonly record struct FraudScoreRequest(
     string? id,
     TransactionDto transaction,
     CustomerDto customer,
@@ -9,31 +9,31 @@ public sealed record FraudScoreRequest(
     LastTransactionDto? last_transaction
 );
 
-public sealed record TransactionDto(
+public readonly record struct TransactionDto(
     float amount,
     int installments,
     DateTimeOffset requested_at
 );
 
-public sealed record CustomerDto(
+public readonly record struct CustomerDto(
     float avg_amount,
     int tx_count_24h,
     string[]? known_merchants
 );
 
-public sealed record MerchantDto(
+public readonly record struct MerchantDto(
     string id,
     string? mcc,
     float avg_amount
 );
 
-public sealed record TerminalDto(
+public readonly record struct TerminalDto(
     bool is_online,
     bool card_present,
     float km_from_home
 );
 
-public sealed record LastTransactionDto(
+public readonly record struct LastTransactionDto(
     DateTimeOffset timestamp,
     float km_from_current
 );

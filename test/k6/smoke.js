@@ -3,6 +3,7 @@ import { check, sleep } from 'k6';
 import { makePayload } from './lib/payloads.js';
 
 export const options = {
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   vus: 1,
   duration: '10s',
   thresholds: {
@@ -23,6 +24,28 @@ export function setup() {
     sleep(1);
   }
   throw new Error('GET /ready did not return HTTP 200 within timeout');
+}
+
+export function handleSummary(data) {
+  const failedRate = data.metrics.http_req_failed?.values?.rate ?? 0;
+  const checksRate = data.metrics.checks?.values?.rate ?? 0;
+  const duration = data.metrics.http_req_duration?.values;
+  const reqs = data.metrics.http_reqs?.values?.count ?? 0;
+
+  const lines = [
+    '--- k6 smoke summary (custom) ---',
+    `http_reqs (total requests): ${reqs}`,
+    `http_req_failed rate: ${(failedRate * 100).toFixed(4)}%`,
+    `checks pass rate: ${(checksRate * 100).toFixed(2)}%`,
+    `http_req_duration p(90): ${duration?.['p(90)']?.toFixed(3) ?? 'n/a'} ms`,
+    `http_req_duration p(95): ${duration?.['p(95)']?.toFixed(3) ?? 'n/a'} ms`,
+    `http_req_duration p(99): ${duration?.['p(99)']?.toFixed(3) ?? 'n/a'} ms`,
+    '----------------------------------',
+  ];
+
+  return {
+    stdout: lines.join('\n') + '\n',
+  };
 }
 
 export default function (data) {
