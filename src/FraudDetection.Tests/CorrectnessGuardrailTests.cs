@@ -19,8 +19,25 @@ public sealed class CorrectnessGuardrailTests
     private static MccRiskProvider Mcc()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mcc_{Guid.NewGuid():N}.json");
-        File.WriteAllText(path, MccJson);
-        return MccRiskProvider.LoadFromFile(path);
+        try
+        {
+            File.WriteAllText(path, MccJson);
+            return MccRiskProvider.LoadFromFile(path);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(path);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup; ignore locked/unavailable temp files.
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private static FraudScoreRequest LowRiskGrocery() => new(
@@ -106,6 +123,58 @@ public sealed class CorrectnessGuardrailTests
 
         Assert.Equal(0.0f, score);
         Assert.True(approved);
+    }
+
+    [Fact]
+    public void IvfSearch_NoNeighborsInProbedClusters_FailsClosed_AndIsDenied()
+    {
+        const int dim = 14;
+        const int nlist = 2;
+        const int count = 5;
+
+        var centroids = new byte[nlist * dim];
+        for (var d = 0; d < dim; d++) centroids[d] = 50;
+        for (var d = 0; d < dim; d++) centroids[dim + d] = 200;
+
+        // Cluster 0 empty; all vectors in cluster 1 near centroid 200.
+        var offsets = new[] { 0, 0, count };
+
+        var vectors = new byte[count * dim];
+        for (var i = 0; i < count; i++)
+        {
+            var off = i * dim;
+            for (var d = 0; d < dim; d++)
+                vectors[off + d] = (byte)(200 + i);
+        }
+
+        var labels = new byte[count];
+
+        var index = new IvfIndex
+        {
+            NList = nlist,
+            Count = count,
+            Centroids = centroids,
+            Offsets = offsets,
+            Vectors = vectors,
+            Labels = labels,
+        };
+
+        var query = new byte[dim];
+        for (var d = 0; d < dim; d++) query[d] = 50;
+
+        var ivf = new IvfFlatSearcher();
+        var score = ivf.FraudScore5(index, query, nprobe: 1);
+
+        Assert.Equal(1.0f, score);
+        Assert.False(score < Threshold);
+    }
+
+    [Fact]
+    public void TransactionVectorizer_InvalidNormalization_ThrowsAtConstruction()
+    {
+        var bad = new NormalizationOptions { max_amount = 0f };
+        Assert.Throws<InvalidOperationException>(() =>
+            new TransactionVectorizer(bad, Mcc()));
     }
 
     [Fact]

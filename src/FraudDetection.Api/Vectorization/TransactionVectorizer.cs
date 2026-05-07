@@ -21,13 +21,13 @@ public sealed class TransactionVectorizer
 
     public TransactionVectorizer(NormalizationOptions normalization, MccRiskProvider mccRiskProvider)
     {
-        _invMaxAmount = SafeReciprocal(normalization.max_amount);
-        _invMaxInstallments = SafeReciprocal(normalization.max_installments);
-        _invAmountVsAvgRatio = SafeReciprocal(normalization.amount_vs_avg_ratio);
-        _invMaxMinutes = SafeReciprocal(normalization.max_minutes);
-        _invMaxKm = SafeReciprocal(normalization.max_km);
-        _invMaxTxCount24h = SafeReciprocal(normalization.max_tx_count_24h);
-        _invMaxMerchantAvgAmount = SafeReciprocal(normalization.max_merchant_avg_amount);
+        _invMaxAmount = RequirePositiveReciprocal(normalization.max_amount, nameof(normalization.max_amount));
+        _invMaxInstallments = RequirePositiveReciprocal(normalization.max_installments, nameof(normalization.max_installments));
+        _invAmountVsAvgRatio = RequirePositiveReciprocal(normalization.amount_vs_avg_ratio, nameof(normalization.amount_vs_avg_ratio));
+        _invMaxMinutes = RequirePositiveReciprocal(normalization.max_minutes, nameof(normalization.max_minutes));
+        _invMaxKm = RequirePositiveReciprocal(normalization.max_km, nameof(normalization.max_km));
+        _invMaxTxCount24h = RequirePositiveReciprocal(normalization.max_tx_count_24h, nameof(normalization.max_tx_count_24h));
+        _invMaxMerchantAvgAmount = RequirePositiveReciprocal(normalization.max_merchant_avg_amount, nameof(normalization.max_merchant_avg_amount));
 
         _mcc = mccRiskProvider;
     }
@@ -87,7 +87,12 @@ public sealed class TransactionVectorizer
         v14[13] = Clamp.Clamp01(req.merchant.avg_amount * _invMaxMerchantAvgAmount);
     }
 
-    private static float SafeReciprocal(float value) => value > 0f ? 1f / value : 0f;
+    private static float RequirePositiveReciprocal(float value, string fieldName)
+    {
+        if (!float.IsFinite(value) || value <= 0f)
+            throw new InvalidOperationException($"{fieldName} must be a finite value greater than 0 (got {value}). Fix normalization.json.");
+        return 1f / value;
+    }
 
     private static bool IsKnownMerchant(string merchantId, string[]? knownMerchants)
     {
