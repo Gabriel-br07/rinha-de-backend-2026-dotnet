@@ -45,11 +45,13 @@ internal static class IvfIndexBuilder
 
         centroids = PickRandomCentroids(vectors, count, nlist, seed);
 
-        // First pass: count per cluster
+        // First pass: assign each vector once and count per cluster
+        var assignments = new int[count];
         var clusterCounts = new int[nlist];
         for (var i = 0; i < count; i++)
         {
             var cluster = FindNearestCentroid(vectors, i * Dim, centroids, nlist);
+            assignments[i] = cluster;
             clusterCounts[cluster]++;
         }
 
@@ -73,7 +75,7 @@ internal static class IvfIndexBuilder
 
         for (var i = 0; i < count; i++)
         {
-            var cluster = FindNearestCentroid(vectors, i * Dim, centroids, nlist);
+            var cluster = assignments[i];
             var pos = cursor[cluster]++;
 
             Buffer.BlockCopy(vectors, i * Dim, groupedVectors, pos * Dim, Dim);

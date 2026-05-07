@@ -39,7 +39,9 @@ internal static class IvfIndexWriter
 
         var buf = new byte[4 + (offsets.Length * 4)];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), nlist);
-        Buffer.BlockCopy(offsets, 0, buf, 4, offsets.Length * 4);
+        var payload = buf.AsSpan(4);
+        for (var i = 0; i < offsets.Length; i++)
+            BinaryPrimitives.WriteInt32LittleEndian(payload.Slice(i * 4, 4), offsets[i]);
         File.WriteAllBytes(path, buf);
     }
 }
