@@ -17,8 +17,8 @@ The API exposes exactly:
 - `POST /fraud-score`
 
 ### `GET /ready`
-- Returns **200** only after the binary vector index (`data/references.bin` + `data/labels.bin`) is loaded in memory.
-- Returns **503** while the index is loading or if it failed.
+- Returns **200** once the configured index is loaded (exact: `data/references.bin` + `data/labels.bin`; IVF: `data/ivf_*.bin`).
+- Returns **503** while the index is loading or if startup load failed (and no fallback applied).
 
 ### `POST /fraud-score`
 Input format (DTO shape) matches the challenge contract (see `resources/example-payloads.json`).
@@ -55,8 +55,8 @@ flowchart LR
   subgraph ApiInstance[API instance]
     Ready[GET_/ready] --> IndexStore[IndexStore]
     Fraud[POST_/fraud-score] --> Vectorizer[Vectorizer]
-    Vectorizer --> Quantizer[Quantizer(byte)]
-    Quantizer --> Knn[Exact_kNN_scan_k=5]
+    Vectorizer --> Quantizer[Quantizer_byte]
+    Quantizer --> Knn[Top5_kNN_k=5]
     Knn --> Index[Index_in_memory]
   end
 ```
@@ -76,7 +76,7 @@ flowchart LR
 - **Nginx load balancer**: simple, deterministic, round-robin distribution (`docker/nginx.conf`).
 - **Preprocessed dataset**: `resources/references.json.gz` is converted to compact binaries at build-time.
 - **Quantized byte vectors**: reduces memory vs `float[]` and enables fast integer distance calculations.
-- **Exact k-NN baseline**: squared Euclidean distance in byte-space, `k=5`, no `Math.Sqrt`, no full sort.
+- **Search modes** (env `VECTOR_SEARCH_MODE`): **exact** brute-force k-NN vs **ivf** IVF-Flat (nearest centroids, probe up to `IVF_NPROBE` clusters). Same `k=5`, squared Euclidean in byte-space, no `Math.Sqrt`, no full dataset sort.
 - **No DB in request path**: index is in-memory; no per-request disk access.
 - **Avoid HTTP 500**: fallback JSON response for unexpected errors.
 - **Designed for the Rinha limits**: 2 API instances behind LB, total 1 CPU / 350MB.
@@ -112,13 +112,9 @@ Rules are implemented in `src/FraudDetection.Api/Vectorization/TransactionVector
 
 The dataset (~3M vectors) is shipped as `resources/references.json.gz`.
 
-A preprocessing tool converts it to:
-- `data/references.bin`
-- `data/labels.bin`
+A preprocessing tool converts it to compact binaries (exact layout plus IVF files — see below). Tool: `src/FraudDetection.Preprocess`.
 
-Tool: `src/FraudDetection.Preprocess`
-
-During `docker build`, preprocessing runs in a dedicated stage (see `Dockerfile`) so the runtime path only loads the binary files.
+During `docker build`, preprocessing runs in a dedicated stage (see `Dockerfile`) so the runtime image only loads binaries from `/app/data`.
 
 ## Compact binary format
 
@@ -128,6 +124,25 @@ During `docker build`, preprocessing runs in a dedicated stage (see `Dockerfile`
 - `data/labels.bin`
   - `byte[referenceCount]`
   - `legit -> 0`, `fraud -> 1`
+
+## IVF-Flat binary format
+
+Preprocess emits these alongside the exact index. They are required when `VECTOR_SEARCH_MODE=ivf`:
+
+- `data/ivf_centroids.bin`
+  - `int32 nlist`
+  - `int32 dim` (must be `14`)
+  - `byte[nlist * 14]` centroids (quantized vectors, contiguous)
+- `data/ivf_offsets.bin`
+  - `int32 nlist`
+  - `int32[nlist + 1] offsets`
+  - `offsets[0] = 0`
+  - `offsets[nlist] = referenceCount`
+  - monotonic non-decreasing; defines cluster ranges `[offsets[c], offsets[c+1])`
+- `data/ivf_vectors.bin`
+  - `byte[referenceCount * 14]` vectors grouped by cluster order
+- `data/ivf_labels.bin`
+  - `byte[referenceCount]` labels grouped in the exact same order as `ivf_vectors.bin`
 
 Quantization encoding:
 
@@ -144,23 +159,20 @@ This encoding is used for:
 
 ## Search strategy
 
-Baseline search is an **exact brute-force scan** over all references:
-- `k = 5`
-- distance: **squared Euclidean**
-- compute in **byte-space** using integer math
-- keep top-5 neighbors without sorting the full dataset
+Shared rules for both modes:
+- `k = 5`, **squared Euclidean** in **byte-space**, integer math, partial top-5 maintenance (no full sort).
 
-Implementation: `src/FraudDetection.Api/Search/ExactKnnSearcher.cs`.
+- **Exact**: scan every reference — `src/FraudDetection.Api/Search/ExactKnnSearcher.cs`.
+- **IVF-Flat**: rank centroids, probe top `nprobe` clusters, scan only those vectors — `IvfClusterSelector.cs`, `IvfFlatSearcher.cs`.
 
 ## Error handling strategy
 
-- Startup/index errors are stored in memory and `/ready` remains `503`.
-- `/fraud-score` is wrapped in a try/catch and returns a valid fallback JSON response on unexpected errors.
-- **Sampled** timing logs on `/fraud-score` and **minimal** exception logs — see [docs/testing.md](docs/testing.md).
+- Startup/index errors leave `/ready` at `503` (unless IVF is configured to fall back to exact via `VectorSearch:FallbackToExactOnIvfLoadFailure`).
+- `/fraud-score` uses try/catch and returns a valid fallback JSON on unexpected errors (`approved: true`, `fraud_score: 0`) instead of HTTP 500. Exceptions are logged once at **Warning** — see [docs/testing.md](docs/testing.md).
 
 ## Load testing (k6)
 
-Full steps, result export, interpreting metrics, and `dotnet-counters` guidance: **[docs/testing.md](docs/testing.md)**.
+Smoke/load steps, result export, and optional host diagnostics: **[docs/testing.md](docs/testing.md)**.
 
 ```bash
 docker compose up --build
@@ -216,9 +228,7 @@ Preprocess manually (requires a local .NET 9 SDK):
 dotnet run -c Release --project src/FraudDetection.Preprocess -- resources/references.json.gz data
 ```
 
-Output:
-- `data/references.bin`
-- `data/labels.bin`
+Output includes `data/references.bin`, `data/labels.bin`, and IVF shard files (`ivf_centroids.bin`, `ivf_offsets.bin`, `ivf_vectors.bin`, `ivf_labels.bin`). Cluster count `nlist` is the optional third CLI argument (Dockerfile uses `1024`).
 
 ## How to test the API
 
@@ -231,19 +241,8 @@ curl -s -X POST "http://localhost:9999/fraud-score" -H "Content-Type: applicatio
   -d '{"id":"sanity-tx-local-001","transaction":{"amount":120.5,"installments":2,"requested_at":"2026-03-11T18:45:53Z"},"customer":{"avg_amount":80.0,"tx_count_24h":4,"known_merchants":["M-SANITY-LOCAL-01"]},"merchant":{"id":"M-SANITY-LOCAL-01","mcc":"5411","avg_amount":60.0},"terminal":{"is_online":false,"card_present":true,"km_from_home":12.5},"last_transaction":null}'
 ```
 
-## Future optimizations
-
-The first version uses an **exact k-NN baseline** optimized for compact memory representation. Further benchmark results are needed to decide whether bucket-based pruning or ANN is necessary.
-
-Possible future improvements:
-- bucket/pruning by coarse quantization
-- IVF / HNSW / VP-Tree style ANN
-- SIMD distance loops
-- better cache locality (block scanning)
-- prefetching / threading strategies tuned to the 1 CPU constraint
-
 ## Trade-offs
 
-- **Exact brute force** is simpler and accurate, but may increase p99 latency on the full dataset.
-- **Byte quantization** reduces memory and improves speed, but can slightly affect neighbor precision.
-- **No vector database** reduces memory and infrastructure complexity, but requires careful in-process optimization.
+- **Exact scan** is simplest and matches brute-force neighbors; **IVF** cuts scanned candidates and p99 at the cost of recall (wrong cluster → different neighbors).
+- **Byte quantization** reduces memory and improves speed, but can shift which vectors are “nearest” vs float space.
+- **No vector database** keeps the footprint small but pushes tuning into preprocess + `nprobe`.

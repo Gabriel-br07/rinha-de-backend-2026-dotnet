@@ -58,3 +58,6 @@ nunit-*.xml
 
 # k6 exported summaries (keep directory via results/.gitkeep)
 results/*.json
+
+# Local preprocessed dataset binaries (large)
+data/*.bin
