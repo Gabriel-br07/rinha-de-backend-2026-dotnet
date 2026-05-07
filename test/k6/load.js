@@ -3,6 +3,7 @@ import { check, sleep } from 'k6';
 import { makePayload } from './lib/payloads.js';
 
 export const options = {
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   stages: [
     { duration: '15s', target: 5 },
     { duration: '30s', target: 20 },
@@ -40,7 +41,9 @@ export function handleSummary(data) {
     `http_reqs (total requests): ${reqs}`,
     `http_req_failed rate: ${(failedRate * 100).toFixed(4)}%`,
     `checks pass rate: ${(checksRate * 100).toFixed(2)}%`,
-    `http_req_duration p(50): ${duration?.['p(50)']?.toFixed(3) ?? 'n/a'} ms`,
+    `http_req_duration avg: ${duration?.avg?.toFixed(3) ?? 'n/a'} ms`,
+    `http_req_duration med: ${duration?.med?.toFixed(3) ?? 'n/a'} ms`,
+    `http_req_duration p(90): ${duration?.['p(90)']?.toFixed(3) ?? 'n/a'} ms`,
     `http_req_duration p(95): ${duration?.['p(95)']?.toFixed(3) ?? 'n/a'} ms`,
     `http_req_duration p(99): ${duration?.['p(99)']?.toFixed(3) ?? 'n/a'} ms`,
     '----------------------------------',
